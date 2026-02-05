@@ -40,6 +40,10 @@ class BrewService {
         try task.run()
 
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return try BrewService.parse(data: data)
+    }
+
+    static func parse(data: Data) throws -> [BrewPackage] {
         // If data is empty or invalid JSON, this will throw, which is good.
         let outdatedInfo = try JSONDecoder().decode(BrewOutdated.self, from: data)
 
