@@ -32,7 +32,7 @@ A macOS menu bar application for managing your [Homebrew](https://brew.sh/) pack
 1.  **Clone the repository:**
     ```bash
     git clone <repository-url>
-    cd brew-menu-bar-gemini
+    cd BrewMenuBar
     ```
 
 2.  **Build the application:**
