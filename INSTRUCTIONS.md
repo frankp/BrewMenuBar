@@ -61,3 +61,8 @@ The `updateAll` and `updatePackage` methods handle updating all packages or a si
 ### Preferences
 
 The preferences window is opened by the `openPreferences` method in `AppDelegate`. The UI for the preferences is defined in `PreferencesView.swift`. The "Preferences" menu item has a `gearshape` icon.
+
+Preferences currently include:
+- Refresh interval
+- Launch at login
+- Menu bar icon style (system mug + custom SVG concepts in `icon-concepts/`)

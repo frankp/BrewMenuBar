@@ -16,6 +16,7 @@ A macOS menu bar application for managing your [Homebrew](https://brew.sh/) pack
     *   Open package homepages.
 *   **Preferences:**
     *   Configure the refresh interval (from 5 minutes to 24 hours).
+    *   Choose the menu bar icon style (system mug or custom SVG concepts).
     *   Option to launch the application at login.
 *   **Modern & Robust:**
     *   Supports both Apple Silicon and Intel Macs.
@@ -49,8 +50,8 @@ A macOS menu bar application for managing your [Homebrew](https://brew.sh/) pack
 ## Usage
 
 *   **Status Icon:**
-    *   Empty Mug: No updates available.
-    *   Filled Mug: Updates are available.
+    *   Selected style icon: No updates available.
+    *   Selected style icon + badge (or filled mug in system style): Updates are available.
     *   Rotating Arrows: Checking for updates or installing updates.
 *   **Menu:** Click the status bar icon to see the menu.
     *   **Outdated Packages:** Lists packages that have updates.

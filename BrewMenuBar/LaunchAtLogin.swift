@@ -22,10 +22,7 @@ class LaunchAtLogin {
                 print("SMAppService failed: \(error)")
             }
         } else {
-            // Fallback for older macOS versions
-            if !SMLoginItemSetEnabled(bundleIdentifier as CFString, enabled) {
-                print("SMLoginItemSetEnabled failed")
-            }
+            print("Launch at login requires macOS 13 or later")
         }
     }
 }

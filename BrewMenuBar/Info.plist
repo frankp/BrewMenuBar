@@ -20,5 +20,7 @@
     <string>????</string>
     <key>CFBundleExecutable</key>
     <string>BrewMenuBar</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
 </dict>
 </plist>

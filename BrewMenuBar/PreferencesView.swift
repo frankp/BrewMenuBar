@@ -3,6 +3,8 @@ import SwiftUI
 struct PreferencesView: View {
     @AppStorage("refreshInterval") private var refreshInterval: Double = 3600.0  // Default to 1 hour
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
+    @AppStorage(StatusBarIconStyle.userDefaultsKey) private var statusBarIconStyleRawValue: String =
+        StatusBarIconStyle.systemMug.rawValue
 
     private let refreshIntervals: [(label: String, value: Double)] = [
         ("5 minutes", 300),
@@ -26,6 +28,13 @@ struct PreferencesView: View {
             }
             .pickerStyle(MenuPickerStyle())
 
+            Picker("Menu Bar Icon:", selection: $statusBarIconStyleRawValue) {
+                ForEach(StatusBarIconStyle.allCases) { style in
+                    Text(style.displayName).tag(style.rawValue)
+                }
+            }
+            .pickerStyle(MenuPickerStyle())
+
             Toggle("Launch at login", isOn: $launchAtLogin)
                 .onChange(of: launchAtLogin) { _, newValue in
                     LaunchAtLogin.shared.setLaunchAtLogin(enabled: newValue)
@@ -34,7 +43,7 @@ struct PreferencesView: View {
             Spacer()
         }
         .padding()
-        .frame(width: 400, height: 200)
+        .frame(width: 420, height: 240)
     }
 }
 
