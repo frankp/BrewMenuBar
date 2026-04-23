@@ -25,19 +25,38 @@ A macOS menu bar application for managing your [Homebrew](https://brew.sh/) pack
 
 ## Requirements
 
-*   macOS 12.0 or later.
+*   macOS 12.0 (Monterey) or later.
 *   [Homebrew](https://brew.sh/) installed.
 
-## Installation & Building
+## Installation
+
+### Via Homebrew (recommended)
+
+```bash
+brew tap frankp/brewmenubar
+brew install --cask brew-menubar
+```
+
+> **Note:** This app is ad-hoc signed (not notarized by Apple). On first launch,
+> macOS Gatekeeper may block it. To allow it, go to **System Settings > Privacy
+> & Security** and click **Open Anyway**, or run:
+> ```bash
+> xattr -d com.apple.quarantine /Applications/BrewMenuBar.app
+> ```
+
+### From GitHub Releases
+
+Download the latest `.dmg` from the [Releases](https://github.com/frankp/BrewMenuBar/releases) page, open it, and drag **BrewMenuBar.app** to your Applications folder.
+
+### Building from source
 
 1.  **Clone the repository:**
     ```bash
-    git clone <repository-url>
+    git clone https://github.com/frankp/BrewMenuBar.git
     cd BrewMenuBar
     ```
 
 2.  **Build the application:**
-    Run the included build script:
     ```bash
     ./build.sh
     ```

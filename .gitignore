@@ -1,1 +1,7 @@
 .DS_Store
+
+# Build artifacts
+*.dmg
+*.zip
+BrewMenuBar.app/Contents/MacOS/BrewMenuBar
+dist/

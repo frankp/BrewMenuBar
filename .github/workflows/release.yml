@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x build.sh package.sh
+
+      - name: Extract version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build and Package
+        run: ./package.sh ${{ steps.get_version.outputs.VERSION }}
+
+      - name: Compute SHA256
+        id: sha
+        run: |
+          SHA=$(shasum -a 256 BrewMenuBar-v${{ steps.get_version.outputs.VERSION }}.dmg | awk '{print $1}')
+          echo "SHA256=$SHA" >> $GITHUB_OUTPUT
+
+      - name: Update cask formula in this repo
+        run: |
+          VERSION=${{ steps.get_version.outputs.VERSION }}
+          SHA=${{ steps.sha.outputs.SHA256 }}
+          sed -i '' "s/version \".*\"/version \"${VERSION}\"/" Casks/brew-menubar.rb
+          sed -i '' "s/sha256 \".*\"/sha256 \"${SHA}\"/" Casks/brew-menubar.rb
+
+      - name: Commit updated cask formula
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/brew-menubar.rb
+          git commit -m "Update cask formula for v${{ steps.get_version.outputs.VERSION }}" || true
+          git push origin HEAD:master
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: BrewMenuBar-v${{ steps.get_version.outputs.VERSION }}.dmg
+          name: Release v${{ steps.get_version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Homebrew tap
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ steps.get_version.outputs.VERSION }}
+          SHA=${{ steps.sha.outputs.SHA256 }}
+
+          cd /tmp
+          git clone https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/frankp/homebrew-brewmenubar.git
+          cd homebrew-brewmenubar
+
+          sed -i '' "s/version \".*\"/version \"${VERSION}\"/" Casks/brew-menubar.rb
+          sed -i '' "s/sha256 \".*\"/sha256 \"${SHA}\"/" Casks/brew-menubar.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/brew-menubar.rb
+          git commit -m "Update brew-menubar to v${VERSION}"
+          git push

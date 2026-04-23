@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>com.example.BrewMenuBar</string>
+	<string>com.frankp.BrewMenuBar</string>
 	<key>CFBundleName</key>
 	<string>BrewMenuBar</string>
 	<key>CFBundleVersion</key>

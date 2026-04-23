@@ -3,7 +3,7 @@ import ServiceManagement
 
 class LaunchAtLogin {
     static let shared = LaunchAtLogin()
-    private let bundleIdentifier = "com.example.BrewMenuBar"
+    private let bundleIdentifier = "com.frankp.BrewMenuBar"
 
     func setLaunchAtLogin(enabled: Bool) {
         if #available(macOS 13.0, *) {
