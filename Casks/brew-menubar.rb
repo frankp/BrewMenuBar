@@ -1,6 +1,6 @@
 cask "brew-menubar" do
   version "1.0"
-  sha256 "393ff3c1ea5cf610f7495bc57073a0e9ddc985405de0f3a95e43ce66af47746a"
+  sha256 "01ee6e3c474ad142589e3b02cc026f1445008bde314feb3cbe75631b19f28e11"
 
   url "https://github.com/frankp/BrewMenuBar/releases/download/v#{version}/BrewMenuBar-v#{version}.dmg"
   name "BrewMenuBar"
