@@ -7,7 +7,7 @@ cask "brew-menubar" do
   desc "macOS menu bar application for managing Homebrew packages"
   homepage "https://github.com/frankp/BrewMenuBar"
 
-  depends_on macos: ">= :monterey"
+  depends_on macos: :monterey
 
   app "BrewMenuBar.app"
 
