@@ -3,6 +3,10 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
+# Version to stamp into the app bundle: first argument, else the latest git tag, else "dev".
+VERSION=${1:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')}
+VERSION=${VERSION:-dev}
+
 echo "Compiling Swift files..."
 swiftc -o BrewMenuBar/BrewMenuBar BrewMenuBar/BrewMenuBarApp.swift BrewMenuBar/AppDelegate.swift BrewMenuBar/BrewService.swift BrewMenuBar/PreferencesView.swift BrewMenuBar/LaunchAtLogin.swift BrewMenuBar/NotificationManager.swift BrewMenuBar/StatusBarIconStyle.swift BrewMenuBar/UpgradeProgressView.swift -framework SwiftUI -framework AppKit -framework UserNotifications
 
@@ -21,6 +25,10 @@ mv BrewMenuBar/BrewMenuBar BrewMenuBar.app/Contents/MacOS/
 
 echo "Copying Info.plist..."
 cp BrewMenuBar/Info.plist BrewMenuBar.app/Contents/Info.plist
+
+echo "Setting version to ${VERSION}..."
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" BrewMenuBar.app/Contents/Info.plist
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" BrewMenuBar.app/Contents/Info.plist
 
 echo "Copying assets..."
 if [ -f "BrewMenuBar/AppIcon.icns" ]; then

@@ -8,7 +8,7 @@ APP_NAME="BrewMenuBar"
 DMG_NAME="${APP_NAME}-v${VERSION}.dmg"
 
 echo "Building ${APP_NAME}..."
-./build.sh
+./build.sh "$VERSION"
 
 echo "Creating DMG package..."
 if [ -f "$DMG_NAME" ]; then

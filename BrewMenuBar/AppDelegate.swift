@@ -252,6 +252,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                     preferencesItem.image = NSImage(
                         systemSymbolName: "gearshape", accessibilityDescription: "Preferences")
 
+                    newMenu.addItem(self.versionMenuItem())
                     newMenu.addItem(
                         withTitle: "Quit", action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
@@ -274,6 +275,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                         withTitle: "Try again", action: #selector(self.updateMenu),
                         keyEquivalent: "r")
                     errorMenu.addItem(NSMenuItem.separator())
+                    errorMenu.addItem(self.versionMenuItem())
                     errorMenu.addItem(
                         withTitle: "Quit", action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
@@ -455,6 +457,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Packages finished so far (updated or failed), not the one in progress.
         statusItem?.button?.title = "\(index)/\(total)"
         statusItem?.button?.toolTip = "Updating \(name)\(position): \(step)"
+    }
+
+    /// Disabled menu item showing the app version from the bundle's Info.plist.
+    func versionMenuItem() -> NSMenuItem {
+        let version =
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let item = NSMenuItem(title: "BrewMenuBar v\(version)", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
     }
 
     @objc func openPreferences() {
