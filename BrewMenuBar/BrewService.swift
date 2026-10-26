@@ -7,6 +7,19 @@ struct BrewPackage: Identifiable {
     let currentVersion: String
     let availableVersion: String
     let homepage: String?
+    var pinned: Bool = false
+}
+
+struct BrewCommandResult {
+    let status: Int32
+    let lines: [String]
+
+    /// The most useful line to show when the command failed: brew's own `Error:` line if present.
+    var failureReason: String {
+        lines.last { $0.hasPrefix("Error:") }
+            ?? lines.last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            ?? "brew exited with status \(status)"
+    }
 }
 
 final class BrewService {
@@ -80,7 +93,8 @@ final class BrewService {
                 installedVersions: formula.installed_versions,
                 currentVersion: formula.installed_versions.first ?? "N/A",
                 availableVersion: formula.current_version,
-                homepage: formula.homepage
+                homepage: formula.homepage,
+                pinned: formula.pinned ?? false
             )
         }
 
@@ -97,68 +111,96 @@ final class BrewService {
         return formulaPackages + caskPackages
     }
 
-    func updateAll() async throws {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: self.brewPath)
-        task.arguments = ["upgrade"]
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-
-        task.standardOutput = outputPipe
-        task.standardError = errorPipe
-
-        try task.run()
-        task.waitUntilExit()
-
-        if task.terminationStatus != 0 {
-            // We could capture stderr here for better error messages
+    func updatePackage(
+        packageName: String, onOutput: ((String) -> Void)? = nil
+    ) async throws {
+        let result = try await run(["upgrade", packageName], onLine: onOutput)
+        if result.status != 0 {
             throw NSError(
-                domain: "BrewService", code: Int(task.terminationStatus),
-                userInfo: [NSLocalizedDescriptionKey: "Brew upgrade failed"])
-        }
-    }
-
-    func updatePackage(packageName: String) async throws {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: self.brewPath)
-        task.arguments = ["upgrade", packageName]
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-
-        task.standardOutput = outputPipe
-        task.standardError = errorPipe
-
-        try task.run()
-        task.waitUntilExit()
-
-        if task.terminationStatus != 0 {
-            throw NSError(
-                domain: "BrewService", code: Int(task.terminationStatus),
-                userInfo: [NSLocalizedDescriptionKey: "Brew upgrade failed for \(packageName)"])
+                domain: "BrewService", code: Int(result.status),
+                userInfo: [NSLocalizedDescriptionKey: result.failureReason])
         }
     }
 
     func uninstallPackage(packageName: String) async throws {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: self.brewPath)
-        task.arguments = ["uninstall", packageName]
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-
-        task.standardOutput = outputPipe
-        task.standardError = errorPipe
-
-        try task.run()
-        task.waitUntilExit()
-
-        if task.terminationStatus != 0 {
+        let result = try await run(["uninstall", packageName])
+        if result.status != 0 {
             throw NSError(
-                domain: "BrewService", code: Int(task.terminationStatus),
+                domain: "BrewService", code: Int(result.status),
                 userInfo: [NSLocalizedDescriptionKey: "Brew uninstall failed for \(packageName)"])
         }
+    }
+
+    /// Runs brew with stdout and stderr merged, reporting each line as it arrives.
+    /// Draining the pipe while the process runs also stops brew blocking once the pipe buffer fills.
+    private func run(
+        _ arguments: [String], onLine: ((String) -> Void)? = nil
+    ) async throws -> BrewCommandResult {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: self.brewPath)
+        task.arguments = arguments
+
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+
+        try task.run()
+
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var splitter = LineSplitter()
+                var lines: [String] = []
+                let emit = { (line: String) in
+                    lines.append(line)
+                    onLine?(line)
+                }
+
+                let handle = pipe.fileHandleForReading
+                while case let data = handle.availableData, !data.isEmpty {
+                    splitter.append(data).forEach(emit)
+                }
+                splitter.flush().forEach(emit)
+
+                task.waitUntilExit()
+                continuation.resume(
+                    returning: BrewCommandResult(status: task.terminationStatus, lines: lines))
+            }
+        }
+    }
+
+    /// Roughly how far through one package's upgrade a step is (0...1), or nil if the step says nothing.
+    /// brew doesn't report real percentages, so this maps its phases onto the bar.
+    static func progressFraction(forStep step: String) -> Double? {
+        let verb = step.split(separator: " ").first.map(String.init) ?? step
+        switch verb {
+        case "Fetching", "Fetched", "Downloading": return 0.25
+        case "Upgrading": return 0.5
+        case "Pouring", "Installing", "Moving", "Linking": return 0.7
+        case "Installed", "Caveats", "Summary": return 0.9
+        case "Cleaning", "Removing", "Purging": return 0.95
+        default: return nil
+        }
+    }
+
+    /// Turns a line of `brew upgrade` output into a short status, or nil if it isn't worth showing.
+    static func progressStep(from line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("Error:") { return trimmed }
+        if trimmed.hasPrefix("🍺") { return "Installed" }
+        // Newer brew reports each finished parallel download as "✔︎ Bottle node (22.2.0)".
+        if trimmed.unicodeScalars.first == "\u{2714}" {
+            return "Fetched " + trimmed.drop { !$0.isLetter }
+        }
+        guard trimmed.hasPrefix("==> ") else { return nil }
+
+        let message = String(trimmed.dropFirst(4))
+        let words = message.split(separator: " ")
+        // URLs and bottle filenames are noise in a menu - keep just the verb ("Downloading", "Pouring").
+        if words.dropFirst().contains(where: { $0.contains("://") || $0.hasSuffix(".tar.gz") }),
+           let verb = words.first {
+            return String(verb)
+        }
+        return message.count > 60 ? String(message.prefix(59)) + "…" : message
     }
 
     func fetchServices() async throws -> [BrewServiceInfo] {
@@ -223,6 +265,7 @@ struct OutdatedFormula: Decodable {
     let installed_versions: [String]
     let current_version: String
     let homepage: String?
+    let pinned: Bool?
 }
 
 struct OutdatedCask: Decodable {
@@ -230,6 +273,27 @@ struct OutdatedCask: Decodable {
     let installed_versions: [String]
     let current_version: String
     let homepage: String?
+}
+
+/// Splits a byte stream into lines, holding back a trailing partial line until more data arrives.
+struct LineSplitter {
+    private var buffer = Data()
+
+    mutating func append(_ data: Data) -> [String] {
+        buffer.append(data)
+        var lines: [String] = []
+        while let index = buffer.firstIndex(where: { $0 == UInt8(ascii: "\n") || $0 == UInt8(ascii: "\r") }) {
+            let line = buffer[buffer.startIndex..<index]
+            buffer = Data(buffer[buffer.index(after: index)...])
+            if !line.isEmpty { lines.append(String(decoding: line, as: UTF8.self)) }
+        }
+        return lines
+    }
+
+    mutating func flush() -> [String] {
+        defer { buffer = Data() }
+        return buffer.isEmpty ? [] : [String(decoding: buffer, as: UTF8.self)]
+    }
 }
 
 struct BrewServiceInfo: Decodable, Identifiable {

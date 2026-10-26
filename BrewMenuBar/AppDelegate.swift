@@ -11,6 +11,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     var animationFrame = 0
     var isBusy = false
     var hasOutdatedPackages = false
+    var outdatedPackages: [BrewPackage] = []
+    var lastUpgradeFailures: [(name: String, reason: String)] = []
+    private var progressView: UpgradeProgressView?
 
     private lazy var mugImage: NSImage? = {
         makeSystemSymbolImage(named: "mug", description: "Brew Menu Bar")
@@ -63,6 +66,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem?.button?.imagePosition = .imageLeft
+        statusItem?.button?.font = NSFont.monospacedDigitSystemFont(
+            ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
 
         applyStatusIcon()
 
@@ -116,6 +122,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                         withTitle: "Last Checked: \(lastCheckedTime)", action: nil,
                         keyEquivalent: "")
                     lastCheckedItem.isEnabled = false
+
+                    if !self.lastUpgradeFailures.isEmpty {
+                        let failures = self.lastUpgradeFailures
+                        let failedItem = newMenu.addItem(
+                            withTitle: "⚠️ \(failures.count) update\(failures.count == 1 ? "" : "s") failed",
+                            action: nil, keyEquivalent: "")
+                        let failedMenu = NSMenu()
+                        for failure in failures {
+                            let item = failedMenu.addItem(
+                                withTitle: "\(failure.name): \(failure.reason)", action: nil,
+                                keyEquivalent: "")
+                            item.isEnabled = false
+                        }
+                        failedItem.submenu = failedMenu
+                    }
 
                     newMenu.addItem(NSMenuItem.separator())
 
@@ -235,6 +256,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                         withTitle: "Quit", action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
 
+                    self.outdatedPackages = outdatedPackages
                     self.hasOutdatedPackages = !outdatedPackages.isEmpty
                     self.applyStatusIcon()
                     self.statusItem?.menu = newMenu
@@ -357,58 +379,82 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     @objc func updateAll() {
-        if isBusy { return }
-        isBusy = true
-        startAnimation()
-        let menu = NSMenu()
-        menu.addItem(withTitle: "Updating...", action: nil, keyEquivalent: "")
-        statusItem?.menu = menu
-
-        Task {
-            do {
-                try await brewService.updateAll()
-                await MainActor.run {
-                    self.stopAnimation()
-                    self.isBusy = false
-                    self.updateMenu()
-                }
-            } catch {
-                await MainActor.run {
-                    self.stopAnimation()
-                    self.isBusy = false
-                    print("Error updating all: \(error)")
-                    // Provide feedback to user about failure, maybe via notification or alert
-                }
-            }
-        }
+        // Pinned formulae are skipped by a plain `brew upgrade`, but fail when named explicitly.
+        let names = outdatedPackages.filter { !$0.pinned }.map(\.name)
+        guard !names.isEmpty else { return }
+        runUpgrades(names)
     }
 
     @objc func updatePackage(_ sender: NSMenuItem) {
         guard let packageName = sender.representedObject as? String else { return }
+        runUpgrades([packageName])
+    }
+
+    /// Upgrades packages one at a time so progress ("2/5") and failures can be reported per package.
+    private func runUpgrades(_ names: [String]) {
         if isBusy { return }
         isBusy = true
 
         startAnimation()
-        let menu = NSMenu()
-        menu.addItem(withTitle: "Updating \(packageName)...", action: nil, keyEquivalent: "")
-        statusItem?.menu = menu
+        showProgressMenu()
 
         Task {
-            do {
-                try await brewService.updatePackage(packageName: packageName)
+            var failures: [(name: String, reason: String)] = []
+
+            for (index, name) in names.enumerated() {
                 await MainActor.run {
-                    self.stopAnimation()
-                    self.isBusy = false
-                    self.updateMenu()
+                    self.setUpgradeProgress(
+                        name: name, index: index, total: names.count, step: "Starting…", fraction: 0)
                 }
-            } catch {
-                await MainActor.run {
-                    self.stopAnimation()
-                    self.isBusy = false
-                    print("Error updating \(packageName): \(error)")
+                do {
+                    try await brewService.updatePackage(packageName: name) { line in
+                        guard let step = BrewService.progressStep(from: line) else { return }
+                        Task { @MainActor in
+                            self.setUpgradeProgress(
+                                name: name, index: index, total: names.count, step: step,
+                                fraction: BrewService.progressFraction(forStep: step))
+                        }
+                    }
+                } catch {
+                    print("Error updating \(name): \(error)")
+                    failures.append((name: name, reason: error.localizedDescription))
                 }
             }
+
+            let finalFailures = failures
+            await MainActor.run {
+                self.lastUpgradeFailures = finalFailures
+                NotificationManager.shared.notifyUpgradeFinished(
+                    succeeded: names.count - finalFailures.count, failed: finalFailures.map(\.name))
+                self.stopAnimation()
+                self.isBusy = false
+                self.updateMenu()
+            }
         }
+    }
+
+    private func showProgressMenu() {
+        let menu = NSMenu()
+        let view = UpgradeProgressView()
+        let item = NSMenuItem()
+        item.view = view
+        menu.addItem(item)
+        progressView = view
+        statusItem?.menu = menu
+    }
+
+    /// Updates the open menu, the counter beside the icon, and the icon's tooltip.
+    /// `fraction` is progress through the current package; nil keeps the bar where it is.
+    private func setUpgradeProgress(
+        name: String, index: Int, total: Int, step: String, fraction: Double?
+    ) {
+        let position = total > 1 ? " (\(index + 1) of \(total))" : ""
+        let overall = (Double(index) + (fraction ?? 0)) / Double(total)
+        progressView?.update(title: "Updating \(name)\(position)", step: step, fraction: overall)
+
+        // Packages finished so far (updated or failed), not the one in progress.
+        statusItem?.button?.title = "\(index)/\(total)"
+        statusItem?.button?.toolTip = "Updating \(name)\(position): \(step)"
     }
 
     @objc func openPreferences() {
@@ -430,7 +476,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func startAnimation() {
         animationTimer?.invalidate()
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) {
+        animationTimer = Timer(timeInterval: 0.2, repeats: true) {
             [weak self] _ in
             guard let self = self else { return }
             self.animationFrame = (self.animationFrame + 1) % 8
@@ -442,11 +488,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 button.image = rotatedImage
             }
         }
+        // Common modes keep the icon spinning while the menu is open.
+        if let animationTimer { RunLoop.main.add(animationTimer, forMode: .common) }
     }
 
     func stopAnimation() {
         animationTimer?.invalidate()
         animationTimer = nil
+        statusItem?.button?.title = ""
+        statusItem?.button?.toolTip = nil
         applyStatusIcon()
     }
 
