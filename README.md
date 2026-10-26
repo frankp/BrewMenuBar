@@ -72,6 +72,8 @@ Download the latest `.dmg` from the [Releases](https://github.com/frankp/BrewMen
     *   Selected style icon: No updates available.
     *   Selected style icon + badge (or filled mug in system style): Updates are available.
     *   Rotating Arrows: Checking for updates or installing updates.
+    *   Rotating Arrows + count (e.g. `2/6`): Installing updates, showing how many packages have finished out of those being updated.
+*   **Update Progress:** While updating, the menu shows the package being upgraded, a progress bar and brew's current step. A notification summarises the result, and any packages that failed are listed in the menu with brew's error.
 *   **Menu:** Click the status bar icon to see the menu.
     *   **Outdated Packages:** Lists packages that have updates.
         *   **Submenu:** Hover over a package to see "Update", "Uninstall", and "Home Page" options.

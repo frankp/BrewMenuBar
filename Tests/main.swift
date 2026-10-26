@@ -139,8 +139,70 @@ func testParseServices() {
     }
 }
 
+func testProgressStep() {
+    print("Running testProgressStep...")
+    let cases: [(String, String?)] = [
+        ("==> Downloading https://ghcr.io/v2/homebrew/core/node/blobs/sha256:abc", "Downloading"),
+        ("==> Pouring node--22.2.0.arm64_sequoia.bottle.tar.gz", "Pouring"),
+        ("==> Upgrading node 22.1.0 -> 22.2.0", "Upgrading node 22.1.0 -> 22.2.0"),
+        ("🍺  /opt/homebrew/Cellar/node/22.2.0: 2,000 files, 70MB", "Installed"),
+        ("Error: node is pinned", "Error: node is pinned"),
+        ("✔︎ Bottle Manifest brotli (1.2.1)", "Fetched Bottle Manifest brotli (1.2.1)"),
+        ("Removing: /opt/homebrew/Cellar/node/22.1.0... (2,000 files, 70MB)", nil),
+    ]
+    for (line, expected) in cases {
+        let step = BrewService.progressStep(from: line)
+        assert(step == expected, "progressStep(\"\(line)\") = \(String(describing: step)), expected \(String(describing: expected))")
+    }
+    print("✅ testProgressStep Passed")
+}
+
+func testLineSplitter() {
+    print("Running testLineSplitter...")
+    var splitter = LineSplitter()
+    assert(splitter.append("==> Down".data(using: .utf8)!) == [], "Partial line should be held back")
+    assert(splitter.append("loading\n==> Pour".data(using: .utf8)!) == ["==> Downloading"], "Completed line should be emitted")
+    assert(splitter.append("ing\r\n".data(using: .utf8)!) == ["==> Pouring"], "CRLF should end a line once")
+    assert(splitter.append("tail".data(using: .utf8)!) == [], "Unterminated line should wait")
+    assert(splitter.flush() == ["tail"], "Flush should emit the remaining text")
+    print("✅ testLineSplitter Passed")
+}
+
+func testFailureReason() {
+    print("Running testFailureReason...")
+    let result = BrewCommandResult(status: 1, lines: ["==> Upgrading foo", "Error: foo is pinned", "  hint"])
+    assert(result.failureReason == "Error: foo is pinned", "Should prefer brew's Error: line")
+    assert(BrewCommandResult(status: 3, lines: []).failureReason == "brew exited with status 3", "Should fall back to exit status")
+    print("✅ testFailureReason Passed")
+}
+
+func testParsePinned() {
+    print("Running testParsePinned...")
+    let json = """
+        {"formulae": [{"name": "python@3.12", "installed_versions": ["3.12.1"], "current_version": "3.12.2", "pinned": true, "pinned_version": "3.12.1"}], "casks": []}
+        """
+    let packages = try! BrewService.parse(data: json.data(using: .utf8)!)
+    assert(packages.first?.pinned == true, "Pinned formula should be flagged")
+    print("✅ testParsePinned Passed")
+}
+
+func testProgressFraction() {
+    print("Running testProgressFraction...")
+    assert(BrewService.progressFraction(forStep: "Fetched Bottle node (22.2.0)") == 0.25, "Fetch phase")
+    assert(BrewService.progressFraction(forStep: "Upgrading node 22.1.0 -> 22.2.0") == 0.5, "Upgrade phase")
+    assert(BrewService.progressFraction(forStep: "Pouring") == 0.7, "Pour phase")
+    assert(BrewService.progressFraction(forStep: "Installed") == 0.9, "Installed phase")
+    assert(BrewService.progressFraction(forStep: "Error: node is pinned") == nil, "Errors don't move the bar")
+    print("✅ testProgressFraction Passed")
+}
+
 // Run Tests
 testParseValidJSON()
 testParseEmptyJSON()
 testParseServices()
+testProgressStep()
+testLineSplitter()
+testFailureReason()
+testParsePinned()
+testProgressFraction()
 print("🎉 All tests passed!")
