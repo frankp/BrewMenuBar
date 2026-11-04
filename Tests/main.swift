@@ -170,9 +170,11 @@ func testLineSplitter() {
 
 func testFailureReason() {
     print("Running testFailureReason...")
-    let result = BrewCommandResult(status: 1, lines: ["==> Upgrading foo", "Error: foo is pinned", "  hint"])
+    let result = BrewCommandResult(status: 1, lines: ["==> Upgrading foo", "Error: foo is pinned", "  hint"], stdout: Data())
     assert(result.failureReason == "Error: foo is pinned", "Should prefer brew's Error: line")
-    assert(BrewCommandResult(status: 3, lines: []).failureReason == "brew exited with status 3", "Should fall back to exit status")
+    assert(BrewCommandResult(status: 3, lines: [], stdout: Data()).failureReason == "brew exited with status 3", "Should fall back to exit status")
+    let stopped = BrewCommandResult(status: 15, lines: ["Error: boom"], stdout: Data(), stopReason: "Cancelled")
+    assert(stopped.failureReason == "Cancelled" && !stopped.succeeded, "Stop reason should win")
     print("✅ testFailureReason Passed")
 }
 
@@ -196,6 +198,72 @@ func testProgressFraction() {
     print("✅ testProgressFraction Passed")
 }
 
+func runShell(_ script: String, limits: CommandLimits, captureStdout: Bool = false) async -> (BrewCommandResult, TimeInterval) {
+    let start = Date()
+    let runner = CommandRunner(
+        executable: "/bin/sh", arguments: ["-c", script], limits: limits, captureStdout: captureStdout)
+    let result = try! await runner.run()
+    return (result, Date().timeIntervalSince(start))
+}
+
+func testRunnerIgnoresLeftoverChildHoldingPipe() async {
+    print("Running testRunnerIgnoresLeftoverChildHoldingPipe...")
+    // The background sleep inherits stdout, so the pipe stays open after sh exits - this used to hang.
+    let (result, elapsed) = await runShell("echo hi; sleep 30 &", limits: CommandLimits(total: 60, idle: nil))
+    assert(elapsed < 5, "Should finish shortly after exit, took \(elapsed)s")
+    assert(result.succeeded, "Should succeed: \(result.failureReason)")
+    assert(result.lines == ["hi"], "Lines mismatch: \(result.lines)")
+    print("✅ testRunnerIgnoresLeftoverChildHoldingPipe Passed")
+}
+
+func testRunnerStopsStalledCommand() async {
+    print("Running testRunnerStopsStalledCommand...")
+    let (result, elapsed) = await runShell("echo start; sleep 30", limits: CommandLimits(total: 60, idle: 1.5))
+    assert(elapsed < 10, "Stall should be detected quickly, took \(elapsed)s")
+    assert(!result.succeeded, "Stalled command should fail")
+    assert(result.failureReason.hasPrefix("Stalled"), "Reason: \(result.failureReason)")
+    assert(result.failureReason.contains("start"), "Reason should name last output: \(result.failureReason)")
+    print("✅ testRunnerStopsStalledCommand Passed")
+}
+
+func testRunnerEnforcesTotalLimit() async {
+    print("Running testRunnerEnforcesTotalLimit...")
+    let (result, elapsed) = await runShell(
+        "while true; do echo tick; sleep 0.2; done", limits: CommandLimits(total: 1.5, idle: 1))
+    assert(elapsed < 10, "Timeout should fire, took \(elapsed)s")
+    assert(result.failureReason.hasPrefix("Timed out"), "Reason: \(result.failureReason)")
+    print("✅ testRunnerEnforcesTotalLimit Passed")
+}
+
+func testRunnerCancel() async {
+    print("Running testRunnerCancel...")
+    let runner = CommandRunner(
+        executable: "/bin/sh", arguments: ["-c", "sleep 30"], limits: CommandLimits(total: 60, idle: nil))
+    let start = Date()
+    DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { runner.cancel() }
+    let result = try! await runner.run()
+    assert(Date().timeIntervalSince(start) < 8, "Cancel should stop the command")
+    assert(result.failureReason == "Cancelled", "Reason: \(result.failureReason)")
+    print("✅ testRunnerCancel Passed")
+}
+
+func testRunnerCapturesStdoutSeparately() async {
+    print("Running testRunnerCapturesStdoutSeparately...")
+    let (result, _) = await runShell(
+        "echo '{}'; echo warn >&2", limits: CommandLimits(total: 10, idle: nil), captureStdout: true)
+    assert(String(decoding: result.stdout, as: UTF8.self) == "{}\n", "stdout: \(result.stdout)")
+    assert(result.lines == ["warn"], "stderr lines: \(result.lines)")
+    print("✅ testRunnerCapturesStdoutSeparately Passed")
+}
+
+func testRunnerGivesNoStdin() async {
+    print("Running testRunnerGivesNoStdin...")
+    // A command waiting for input (like a password prompt) must see EOF, not block.
+    let (result, elapsed) = await runShell("cat; echo done", limits: CommandLimits(total: 10, idle: nil))
+    assert(elapsed < 5 && result.lines == ["done"], "stdin should be empty: \(result.lines)")
+    print("✅ testRunnerGivesNoStdin Passed")
+}
+
 // Run Tests
 testParseValidJSON()
 testParseEmptyJSON()
@@ -205,4 +273,10 @@ testLineSplitter()
 testFailureReason()
 testParsePinned()
 testProgressFraction()
+await testRunnerIgnoresLeftoverChildHoldingPipe()
+await testRunnerStopsStalledCommand()
+await testRunnerEnforcesTotalLimit()
+await testRunnerCancel()
+await testRunnerCapturesStdoutSeparately()
+await testRunnerGivesNoStdin()
 print("🎉 All tests passed!")

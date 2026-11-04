@@ -14,6 +14,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     var outdatedPackages: [BrewPackage] = []
     var lastUpgradeFailures: [(name: String, reason: String)] = []
     private var progressView: UpgradeProgressView?
+    private var upgradeCancelled = false
 
     private lazy var mugImage: NSImage? = {
         makeSystemSymbolImage(named: "mug", description: "Brew Menu Bar")
@@ -242,6 +243,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                         withTitle: "Refresh", action: #selector(self.updateMenu), keyEquivalent: "r"
                     )
                     refreshItem.target = self
+                    let logItem = newMenu.addItem(
+                        withTitle: "Show Log", action: #selector(self.openLog), keyEquivalent: "l")
+                    logItem.target = self
 
                     // Add Preferences item
                     newMenu.addItem(NSMenuItem.separator())
@@ -271,9 +275,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                     let errorMenu = NSMenu()
                     errorMenu.addItem(
                         withTitle: "Error checking for updates", action: nil, keyEquivalent: "")
-                    errorMenu.addItem(
+                    let reasonItem = errorMenu.addItem(
+                        withTitle: String(error.localizedDescription.prefix(80)), action: nil,
+                        keyEquivalent: "")
+                    reasonItem.isEnabled = false
+                    let retryItem = errorMenu.addItem(
                         withTitle: "Try again", action: #selector(self.updateMenu),
                         keyEquivalent: "r")
+                    retryItem.target = self
+                    let logItem = errorMenu.addItem(
+                        withTitle: "Show Log", action: #selector(self.openLog), keyEquivalent: "l")
+                    logItem.target = self
                     errorMenu.addItem(NSMenuItem.separator())
                     errorMenu.addItem(self.versionMenuItem())
                     errorMenu.addItem(
@@ -400,10 +412,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         startAnimation()
         showProgressMenu()
 
+        upgradeCancelled = false
+
         Task {
             var failures: [(name: String, reason: String)] = []
+            var succeeded = 0
 
             for (index, name) in names.enumerated() {
+                if await MainActor.run(body: { self.upgradeCancelled }) { break }
                 await MainActor.run {
                     self.setUpgradeProgress(
                         name: name, index: index, total: names.count, step: "Starting…", fraction: 0)
@@ -417,6 +433,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                                 fraction: BrewService.progressFraction(forStep: step))
                         }
                     }
+                    succeeded += 1
                 } catch {
                     print("Error updating \(name): \(error)")
                     failures.append((name: name, reason: error.localizedDescription))
@@ -424,15 +441,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             }
 
             let finalFailures = failures
+            let finalSucceeded = succeeded
             await MainActor.run {
                 self.lastUpgradeFailures = finalFailures
-                NotificationManager.shared.notifyUpgradeFinished(
-                    succeeded: names.count - finalFailures.count, failed: finalFailures.map(\.name))
+                if !self.upgradeCancelled || finalSucceeded + finalFailures.count > 0 {
+                    NotificationManager.shared.notifyUpgradeFinished(
+                        succeeded: finalSucceeded, failed: finalFailures.map(\.name))
+                }
+                self.upgradeCancelled = false
                 self.stopAnimation()
                 self.isBusy = false
                 self.updateMenu()
             }
         }
+    }
+
+    /// Stops the running upgrade and skips any still queued.
+    @objc func cancelUpgrades() {
+        upgradeCancelled = true
+        progressView?.update(title: "Cancelling…", step: "Stopping brew", fraction: 0)
+        brewService.cancelCurrentCommand()
+    }
+
+    @objc func openLog() {
+        NSWorkspace.shared.open(CommandLog.shared.url)
     }
 
     private func showProgressMenu() {
@@ -441,6 +473,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         let item = NSMenuItem()
         item.view = view
         menu.addItem(item)
+        menu.addItem(NSMenuItem.separator())
+        let cancelItem = menu.addItem(
+            withTitle: "Cancel", action: #selector(cancelUpgrades), keyEquivalent: ".")
+        cancelItem.target = self
+        let logItem = menu.addItem(
+            withTitle: "Show Log", action: #selector(openLog), keyEquivalent: "l")
+        logItem.target = self
         progressView = view
         statusItem?.menu = menu
     }
@@ -454,8 +493,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         let overall = (Double(index) + (fraction ?? 0)) / Double(total)
         progressView?.update(title: "Updating \(name)\(position)", step: step, fraction: overall)
 
-        // Packages finished so far (updated or failed), not the one in progress.
-        statusItem?.button?.title = "\(index)/\(total)"
+        // The package in progress ("1/3" while the first runs), so the counter never sits on 0.
+        statusItem?.button?.title = "\(index + 1)/\(total)"
         statusItem?.button?.toolTip = "Updating \(name)\(position): \(step)"
     }
 

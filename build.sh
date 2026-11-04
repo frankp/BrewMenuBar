@@ -8,7 +8,7 @@ VERSION=${1:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')}
 VERSION=${VERSION:-dev}
 
 echo "Compiling Swift files..."
-swiftc -o BrewMenuBar/BrewMenuBar BrewMenuBar/BrewMenuBarApp.swift BrewMenuBar/AppDelegate.swift BrewMenuBar/BrewService.swift BrewMenuBar/PreferencesView.swift BrewMenuBar/LaunchAtLogin.swift BrewMenuBar/NotificationManager.swift BrewMenuBar/StatusBarIconStyle.swift BrewMenuBar/UpgradeProgressView.swift -framework SwiftUI -framework AppKit -framework UserNotifications
+swiftc -o BrewMenuBar/BrewMenuBar BrewMenuBar/BrewMenuBarApp.swift BrewMenuBar/AppDelegate.swift BrewMenuBar/BrewService.swift BrewMenuBar/CommandRunner.swift BrewMenuBar/PreferencesView.swift BrewMenuBar/LaunchAtLogin.swift BrewMenuBar/NotificationManager.swift BrewMenuBar/StatusBarIconStyle.swift BrewMenuBar/UpgradeProgressView.swift -framework SwiftUI -framework AppKit -framework UserNotifications
 
 echo "Creating application bundle..."
 # Remove old bundle if it exists
