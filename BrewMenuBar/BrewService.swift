@@ -10,18 +10,6 @@ struct BrewPackage: Identifiable {
     var pinned: Bool = false
 }
 
-struct BrewCommandResult {
-    let status: Int32
-    let lines: [String]
-
-    /// The most useful line to show when the command failed: brew's own `Error:` line if present.
-    var failureReason: String {
-        lines.last { $0.hasPrefix("Error:") }
-            ?? lines.last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            ?? "brew exited with status \(status)"
-    }
-}
-
 final class BrewService {
     private lazy var brewPath: String = {
         let resolved = resolveBrewPath()
@@ -35,7 +23,8 @@ final class BrewService {
 
         let outputPipe = Pipe()
         task.standardOutput = outputPipe
-        task.standardError = Pipe()
+        task.standardError = FileHandle.nullDevice
+        task.standardInput = FileHandle.nullDevice
 
         do {
             try task.run()
@@ -63,24 +52,16 @@ final class BrewService {
     }
 
     func checkForUpdates() async throws -> [BrewPackage] {
-        Task {
-            let updateTask = Process()
-            updateTask.executableURL = URL(fileURLWithPath: self.brewPath)
-            updateTask.arguments = ["update"]
-            try? updateTask.run()
+        // Refresh brew's metadata first, and wait for it: running it alongside `outdated`/`upgrade`
+        // made them contend for brew's lock. Failure here is fine - we just report slightly stale data.
+        let update = try? await run(["update"], limits: .update)
+        if let update, !update.succeeded {
+            print("brew update failed: \(update.failureReason)")
         }
 
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: self.brewPath)
-        task.arguments = ["outdated", "--json"]
-
-        let pipe = Pipe()
-        task.standardOutput = pipe
-
-        try task.run()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return try BrewService.parse(data: data)
+        let result = try await run(["outdated", "--json"], limits: .query, captureStdout: true)
+        guard result.succeeded else { throw BrewError(message: result.failureReason) }
+        return try BrewService.parse(data: result.stdout)
     }
 
     static func parse(data: Data) throws -> [BrewPackage] {
@@ -114,58 +95,60 @@ final class BrewService {
     func updatePackage(
         packageName: String, onOutput: ((String) -> Void)? = nil
     ) async throws {
-        let result = try await run(["upgrade", packageName], onLine: onOutput)
-        if result.status != 0 {
-            throw NSError(
-                domain: "BrewService", code: Int(result.status),
-                userInfo: [NSLocalizedDescriptionKey: result.failureReason])
-        }
+        let result = try await run(["upgrade", packageName], limits: .upgrade, onLine: onOutput)
+        guard result.succeeded else { throw BrewError(message: result.failureReason) }
     }
 
     func uninstallPackage(packageName: String) async throws {
-        let result = try await run(["uninstall", packageName])
-        if result.status != 0 {
-            throw NSError(
-                domain: "BrewService", code: Int(result.status),
-                userInfo: [NSLocalizedDescriptionKey: "Brew uninstall failed for \(packageName)"])
+        let result = try await run(["uninstall", packageName], limits: .action)
+        guard result.succeeded else {
+            throw BrewError(message: "Uninstall of \(packageName) failed: \(result.failureReason)")
         }
     }
 
-    /// Runs brew with stdout and stderr merged, reporting each line as it arrives.
-    /// Draining the pipe while the process runs also stops brew blocking once the pipe buffer fills.
+    /// Stops whatever brew command is running; its caller gets a "Cancelled" failure.
+    func cancelCurrentCommand() {
+        activeLock.lock()
+        let runner = activeRunner
+        activeLock.unlock()
+        runner?.cancel()
+    }
+
+    // Plain sync helpers: NSLock can't be taken directly inside an async function.
+    private func setActiveRunner(_ runner: CommandRunner) {
+        activeLock.lock()
+        activeRunner = runner
+        activeLock.unlock()
+    }
+
+    private func clearActiveRunner(_ runner: CommandRunner) {
+        activeLock.lock()
+        if activeRunner === runner { activeRunner = nil }
+        activeLock.unlock()
+    }
+
+    private let activeLock = NSLock()
+    private var activeRunner: CommandRunner?
+
+    /// Environment for brew: the app already runs `brew update` itself, so stop `upgrade` from
+    /// auto-updating (slow, and a second source of lock contention) and drop the env-hint noise.
+    private var brewEnvironment: [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["HOMEBREW_NO_AUTO_UPDATE"] = "1"
+        env["HOMEBREW_NO_ENV_HINTS"] = "1"
+        return env
+    }
+
     private func run(
-        _ arguments: [String], onLine: ((String) -> Void)? = nil
+        _ arguments: [String], limits: CommandLimits, captureStdout: Bool = false,
+        onLine: ((String) -> Void)? = nil
     ) async throws -> BrewCommandResult {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: self.brewPath)
-        task.arguments = arguments
-
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = pipe
-
-        try task.run()
-
-        return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var splitter = LineSplitter()
-                var lines: [String] = []
-                let emit = { (line: String) in
-                    lines.append(line)
-                    onLine?(line)
-                }
-
-                let handle = pipe.fileHandleForReading
-                while case let data = handle.availableData, !data.isEmpty {
-                    splitter.append(data).forEach(emit)
-                }
-                splitter.flush().forEach(emit)
-
-                task.waitUntilExit()
-                continuation.resume(
-                    returning: BrewCommandResult(status: task.terminationStatus, lines: lines))
-            }
-        }
+        let runner = CommandRunner(
+            executable: brewPath, arguments: arguments, environment: brewEnvironment,
+            limits: limits, captureStdout: captureStdout, onLine: onLine)
+        setActiveRunner(runner)
+        defer { clearActiveRunner(runner) }
+        return try await runner.run()
     }
 
     /// Roughly how far through one package's upgrade a step is (0...1), or nil if the step says nothing.
@@ -204,17 +187,9 @@ final class BrewService {
     }
 
     func fetchServices() async throws -> [BrewServiceInfo] {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: self.brewPath)
-        task.arguments = ["services", "list", "--json"]
-
-        let pipe = Pipe()
-        task.standardOutput = pipe
-
-        try task.run()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return try BrewService.parseServices(data: data)
+        let result = try await run(["services", "list", "--json"], limits: .query, captureStdout: true)
+        guard result.succeeded else { throw BrewError(message: result.failureReason) }
+        return try BrewService.parseServices(data: result.stdout)
     }
 
     static func parseServices(data: Data) throws -> [BrewServiceInfo] {
@@ -234,23 +209,10 @@ final class BrewService {
     }
 
     private func runServiceCommand(command: String, serviceName: String) async throws {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: self.brewPath)
-        task.arguments = ["services", command, serviceName]
-
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-
-        task.standardOutput = outputPipe
-        task.standardError = errorPipe
-
-        try task.run()
-        task.waitUntilExit()
-
-        if task.terminationStatus != 0 {
-            throw NSError(
-                domain: "BrewService", code: Int(task.terminationStatus),
-                userInfo: [NSLocalizedDescriptionKey: "Brew services \(command) failed for \(serviceName)"])
+        let result = try await run(["services", command, serviceName], limits: .action)
+        guard result.succeeded else {
+            throw BrewError(
+                message: "brew services \(command) \(serviceName) failed: \(result.failureReason)")
         }
     }
 }
